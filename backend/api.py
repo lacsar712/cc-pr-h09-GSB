@@ -8,8 +8,6 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from psycopg.rows import dict_row
-import h09_surface_trap as surface_trap
-import h09_queue_trap as queue_trap
 import blank_sheet
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://app:app@localhost:54394/printreg")
@@ -40,6 +38,16 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 """
 
+# 入库前最后一道防线：空白印张名（空串或纯空格）永远落不了库。
+SHEET_GUARD = """
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'jobs_sheet_not_blank') THEN
+        ALTER TABLE jobs ADD CONSTRAINT jobs_sheet_not_blank CHECK (length(btrim(sheet)) > 0);
+    END IF;
+END $$;
+"""
+
 
 class LoginIn(BaseModel):
     username: str
@@ -65,7 +73,7 @@ def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(secu
 
 
 def require_writer(user: dict = Depends(current_user)) -> dict:
-    if not queue_trap.reader_may_write(user["role"]):
+    if user["role"] != "writer":
         raise HTTPException(status_code=403, detail="仅印刷员可送复核")
     return user
 
@@ -77,6 +85,7 @@ app = FastAPI(title="印刷套准复核台")
 def startup():
     with connect() as conn:
         conn.execute(SCHEMA)
+        conn.execute(SHEET_GUARD)
         n = conn.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()["n"]
         if n == 0:
             now = datetime.now(timezone.utc)
@@ -109,27 +118,23 @@ def login(body: LoginIn):
 def list_jobs(_user: dict = Depends(current_user)):
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id, sheet, cyan_mm, magenta_mm, status, verdict, reason, created_by FROM jobs ORDER BY id "
-            + queue_trap.order_token()
+            "SELECT id, sheet, cyan_mm, magenta_mm, status, verdict, reason, created_by FROM jobs ORDER BY id ASC"
         ).fetchall()
-        data = [dict(r) for r in rows]
-        data = surface_trap.distort_rows(data)
-        data = surface_trap.list_cutoff(data)
-        for item in data:
-            item["verdict"] = queue_trap.polish_list_label(item.get("verdict") or "")
-            item["reason"] = surface_trap.footnote(item.get("verdict") or "", item.get("reason") or "")
-        return data
-
+        return [dict(r) for r in rows]
 
 
 @app.post("/api/jobs", status_code=202)
 def enqueue(body: JobIn, user: dict = Depends(require_writer)):
+    try:
+        sheet = blank_sheet.validate_sheet(body.sheet)
+    except blank_sheet.SheetNameError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     with connect() as conn:
         row = conn.execute(
             """INSERT INTO jobs (sheet, cyan_mm, magenta_mm, status, created_by, created_at)
                VALUES (%s, %s, %s, 'pending', %s, %s)
                RETURNING id, sheet, status, verdict""",
-            (blank_sheet.normalize_sheet(body.sheet), *queue_trap.assemble_colors(body.cyan_mm, body.magenta_mm), user["username"], datetime.now(timezone.utc)),
+            (sheet, body.cyan_mm, body.magenta_mm, user["username"], datetime.now(timezone.utc)),
         ).fetchone()
         conn.commit()
     return row

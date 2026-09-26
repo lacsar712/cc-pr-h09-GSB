@@ -5,7 +5,6 @@ import psycopg
 from psycopg.rows import dict_row
 
 from rules import judge
-import h09_queue_trap as queue_trap
 
 DSN = os.environ["DATABASE_URL"]
 
@@ -56,23 +55,26 @@ def claim_once(conn):
     return row
 
 
+def process_one(conn) -> bool:
+    """领走一条待处理印张并写回结论；没有待处理时返回 False。"""
+    row = claim_once(conn)
+    if row is None:
+        return False
+    verdict, reason = judge(row["cyan_mm"], row["magenta_mm"])
+    conn.execute(
+        "UPDATE jobs SET status = 'done', verdict = %s, reason = %s WHERE id = %s",
+        (verdict, reason, row["id"]),
+    )
+    return True
+
+
 def main():
     ensure()
     while True:
         with connect() as conn:
-            row = claim_once(conn)
-            if row is None:
-                conn.commit()
-            else:
-                c, m = queue_trap.assemble_colors(row["cyan_mm"], row["magenta_mm"])
-                verdict, reason = judge(c, m)
-                verdict, reason = queue_trap.maybe_force_fail(verdict, reason)
-                conn.execute(
-                    "UPDATE jobs SET status = 'done', verdict = %s, reason = %s WHERE id = %s",
-                    (verdict, reason, row["id"]),
-                )
-                conn.commit()
-        if row is None:
+            worked = process_one(conn)
+            conn.commit()
+        if not worked:
             time.sleep(0.4)
 
 
