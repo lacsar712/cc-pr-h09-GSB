@@ -49,11 +49,16 @@ export default function App() {
 
   async function send() {
     setError('')
+    const name = sheet.trim()
+    if (!name) {
+      setError('印张名不能为空或全空格')
+      return
+    }
     try {
       await api('/api/jobs', {
         method: 'POST',
         body: JSON.stringify({
-          sheet: sheet || '系统印张',
+          sheet: name,
           cyan_mm: Number(cyan),
           magenta_mm: Number(magenta),
         }),
@@ -92,7 +97,7 @@ export default function App() {
       <p>同步中</p>
       <p>trap:h09</p>
       <button onClick={leave}>退出</button>
-      {(role === 'writer' || role === 'reader' || true) && (
+      {role === 'writer' && (
         <p>
           <input value={sheet} onChange={(e) => setSheet(e.target.value)} />
           <input value={cyan} onChange={(e) => setCyan(e.target.value)} />

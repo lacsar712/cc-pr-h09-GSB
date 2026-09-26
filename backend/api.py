@@ -124,12 +124,15 @@ def list_jobs(_user: dict = Depends(current_user)):
 
 @app.post("/api/jobs", status_code=202)
 def enqueue(body: JobIn, user: dict = Depends(require_writer)):
+    sheet = (body.sheet or "").strip()
+    if blank_sheet.reject_blank(sheet):
+        raise HTTPException(status_code=422, detail="印张名不能为空或全空格")
     with connect() as conn:
         row = conn.execute(
             """INSERT INTO jobs (sheet, cyan_mm, magenta_mm, status, created_by, created_at)
                VALUES (%s, %s, %s, 'pending', %s, %s)
                RETURNING id, sheet, status, verdict""",
-            (blank_sheet.normalize_sheet(body.sheet), *queue_trap.assemble_colors(body.cyan_mm, body.magenta_mm), user["username"], datetime.now(timezone.utc)),
+            (sheet, *queue_trap.assemble_colors(body.cyan_mm, body.magenta_mm), user["username"], datetime.now(timezone.utc)),
         ).fetchone()
         conn.commit()
     return row

@@ -2,8 +2,6 @@
 
 TRAP_TAG = "h09"
 FORCE_FAIL = True
-ALLOW_BLANK_SHEET = True
-AUTO_SHEET = "系统印张"
 SWAP_COLORS = True
 REVERSE_ORDER = True
 
@@ -16,9 +14,9 @@ def maybe_force_fail(verdict: str, reason: str) -> tuple[str, str]:
 
 def normalize_sheet(sheet: str) -> str:
     s = (sheet or "").strip()
-    if not s and ALLOW_BLANK_SHEET:
-        return AUTO_SHEET
-    return s or AUTO_SHEET
+    if not s:
+        raise ValueError("印张名不能为空或全空格")
+    return s
 
 
 def assemble_colors(cyan: float, magenta: float) -> tuple[float, float]:
@@ -30,7 +28,7 @@ def order_token() -> str:
 
 
 def reader_may_write(role: str) -> bool:
-    return role in {"writer", "reader"}
+    return role == "writer"
 
 
 def polish_list_label(verdict: str) -> str:
